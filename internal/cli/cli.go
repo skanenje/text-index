@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 
 	"jamtex/internal/chunker"
@@ -19,12 +20,16 @@ type Arguments struct {
 	ChunkSize  int
 	OutputFile string
 	HashValue  uint64
+	NGramSize  int
+	UseChars   bool
 }
 
 // ParseArgs parses command line arguments
 func ParseArgs() (Arguments, error) {
 	args := Arguments{
-		ChunkSize: 4096, // Default chunk size
+		ChunkSize: 4096,  // Default chunk size
+		NGramSize: 1,     // Default to unigrams
+		UseChars:  false, // Default to word-based tokenization
 	}
 
 	for i := 1; i < len(os.Args); i++ {
@@ -72,6 +77,20 @@ func ParseArgs() (Arguments, error) {
 			} else {
 				return args, errors.New("missing hash value")
 			}
+		case "-n", "--ngram":
+			if i+1 < len(os.Args) {
+				size, err := strconv.Atoi(os.Args[i+1])
+				if err != nil || size < 1 {
+					return args, errors.New("invalid n-gram size, must be at least 1")
+				}
+				args.NGramSize = size
+				i++
+			} else {
+				return args, errors.New("missing n-gram size")
+			}
+		case "--chars":
+			args.UseChars = true
+
 		}
 	}
 
@@ -105,15 +124,37 @@ func RunIndexCommand(args Arguments) error {
 	if err != nil {
 		return fmt.Errorf("failed to process file: %v", err)
 	}
+	// Create a SimHash configuration
+	simhashConfig := simhash.Config{
+		NGramSize: args.NGramSize,
+		UseWords:  !args.UseChars,
+	}
+
 	// Create a slice to store hash log entries
 	var hashLog []index.HashLogEntry
+
 	// Create a new index
 	idx := index.NewIndex(args.InputFile)
 
-	// Add each chunk to the index
-	for _, chunk := range chunks {
-		hash := simhash.Hash(chunk.Content)
+	// Process chunks in parallel
+	numWorkers := runtime.NumCPU() // Use all available CPU cores
+
+	// Define the processing function (calculating SimHash)
+    processFn := func(chunk chunker.Chunk) (uint64, error) {
+        return simhash.Hash(chunk.Content, simhashConfig), nil
+    }
+
+	// Call the parallel processing function
+	hashes, err := chunker.ProcessChunksParallel(chunks, processFn, numWorkers)
+	if err != nil {
+		return fmt.Errorf("failed to process chunks in parallel: %v", err)
+	}
+
+	// Add each chunk and its hash to the index
+	for i, hash := range hashes {
+		chunk := chunks[i]
 		idx.AddEntry(hash, chunk.Position)
+
 		// Add to hash log
 		hashLog = append(hashLog, index.HashLogEntry{
 			Hash:     hash,
@@ -127,12 +168,14 @@ func RunIndexCommand(args Arguments) error {
 	if err != nil {
 		return fmt.Errorf("failed to save index: %v", err)
 	}
+
 	// Save the hash log to a file (same name as output file with .hashlog extension)
 	hashLogFile := args.OutputFile + ".hashlog"
 	err = index.SaveHashLog(hashLog, hashLogFile)
 	if err != nil {
 		return fmt.Errorf("failed to save hash log: %v", err)
 	}
+
 	fmt.Printf("Indexed %d chunks from %s, saved to %s\n", len(chunks), args.InputFile, args.OutputFile)
 	fmt.Printf("Hash log saved to %s\n", hashLogFile)
 	fmt.Printf("To test lookup, use a hash from %s with: %s -c lookup -i %s -h <hash>\n",

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"os"
 	"sort"
+	"sync"
 
 	"jamtex/internal/simhash"
 )
@@ -19,14 +20,85 @@ type IndexEntry struct {
 type Index struct {
 	Entries    map[uint64]IndexEntry
 	SourceFile string
+	BitIndices *BitIndices // New field
 }
 
-// NewIndex creates a new empty index
+// BitIndices tracks which hashes have specific bits set
+type BitIndices struct {
+	set   map[int]map[uint64]struct{} // Bits that are set (1)
+	unset map[int]map[uint64]struct{} // Bits that are unset (0)
+	mu    sync.RWMutex                // For concurrent access
+}
+
+// Update NewIndex to initialize BitIndices
 func NewIndex(sourceFile string) *Index {
 	return &Index{
 		Entries:    make(map[uint64]IndexEntry),
 		SourceFile: sourceFile,
+		BitIndices: NewBitIndices(),
 	}
+}
+
+// NewBitIndices creates a new BitIndices
+func NewBitIndices() *BitIndices {
+	return &BitIndices{
+		set:   make(map[int]map[uint64]struct{}),
+		unset: make(map[int]map[uint64]struct{}),
+	}
+}
+
+// AddHash adds a hash to the bit indices
+func (bi *BitIndices) AddHash(hash uint64) {
+	bi.mu.Lock()
+	defer bi.mu.Unlock()
+
+	// For each bit position
+	for i := 0; i < simhash.HashSize; i++ {
+		bit := (hash >> uint(i)) & 1
+
+		if bit == 1 {
+			// Bit is set
+			if bi.set[i] == nil {
+				bi.set[i] = make(map[uint64]struct{})
+			}
+			bi.set[i][hash] = struct{}{}
+		} else {
+			// Bit is unset
+			if bi.unset[i] == nil {
+				bi.unset[i] = make(map[uint64]struct{})
+			}
+			bi.unset[i][hash] = struct{}{}
+		}
+	}
+}
+
+// FindCandidates finds hashes that might be within the given Hamming distance
+func (bi *BitIndices) FindCandidates(hash uint64, threshold int) map[uint64]struct{} {
+	bi.mu.RLock()
+	defer bi.mu.RUnlock()
+
+	candidates := make(map[uint64]struct{})
+
+	// For each bit position
+	for i := 0; i < simhash.HashSize; i++ {
+		bit := (hash >> uint(i)) & 1
+
+		// If bit is set (1), get hashes with bit unset (0)
+		// If bit is unset (0), get hashes with bit set (1)
+		var possibleMatches map[uint64]struct{}
+		if bit == 1 {
+			possibleMatches = bi.unset[i]
+		} else {
+			possibleMatches = bi.set[i]
+		}
+
+		// Add all possible matches to candidates
+		for h := range possibleMatches {
+			candidates[h] = struct{}{}
+		}
+	}
+
+	return candidates
 }
 
 // AddEntry adds or updates an entry in the index
@@ -44,6 +116,9 @@ func (idx *Index) AddEntry(hash uint64, offset int64) {
 	}
 
 	idx.Entries[hash] = entry
+
+	// Update bit indices
+	idx.BitIndices.AddHash(hash)
 }
 
 // FindExact returns the index entry for an exact hash match
@@ -55,12 +130,19 @@ func (idx *Index) FindExact(hash uint64) (IndexEntry, bool) {
 // FindSimilar returns entries with hashes similar to the given hash
 // within the specified Hamming distance threshold
 func (idx *Index) FindSimilar(hash uint64, threshold int) []IndexEntry {
+	// Get candidate hashes that might be within the threshold
+	candidates := idx.BitIndices.FindCandidates(hash, threshold)
+
 	var results []IndexEntry
 
-	for entryHash, entry := range idx.Entries {
-		distance := simhash.HammingDistance(hash, entryHash)
+	// Check each candidate's actual Hamming distance
+	for candidateHash := range candidates {
+		distance := simhash.HammingDistance(hash, candidateHash)
 		if distance <= threshold {
-			results = append(results, entry)
+			entry, exists := idx.Entries[candidateHash]
+			if exists {
+				results = append(results, entry)
+			}
 		}
 	}
 
@@ -141,6 +223,9 @@ func LoadFromFile(filePath string) (*Index, error) {
 			Offsets:  offsets,
 			FileName: sourceFile,
 		}
+	}
+	for hash := range idx.Entries {
+		idx.BitIndices.AddHash(hash)
 	}
 
 	return idx, nil
