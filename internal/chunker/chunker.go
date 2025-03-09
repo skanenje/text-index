@@ -80,7 +80,7 @@ func (c *Chunker) ProcessFileParallel(filePath string) ([]Chunk, error) {
     if err != nil {
         return nil, err
     }
-    
+                                                                                                                                      
     return chunks, nil
 }
 
