@@ -63,7 +63,7 @@ func ParseArgs() (Arguments, error) {
 			}
 		case "-h":
 			if i+1 < len(os.Args) {
-				hash, err := strconv.ParseUint(os.Args[i+1], 16, 64)
+				hash, err := strconv.ParseUint(os.Args[i+1], 10, 64)
 				if err != nil {
 					return args, errors.New("invalid hash value")
 				}

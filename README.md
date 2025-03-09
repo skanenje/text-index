@@ -75,3 +75,11 @@ Use worker goroutines to compute SimHashes concurrently.
 
 Synchronize using channels to collect results and build the index.
 
+## run
+```
+go run cmd/main.go -c index -i testdata/corpus.txt -s 4096 -o index.dat
+
+To test lookup, use a hash from index.dat.hashlog with: main -c lookup -i index.dat -h <hash>
+e.g
+go run cmd/main.go -c lookup -i index.dat -h 644394145692242188
+```
