@@ -1,4 +1,3 @@
-// internal/cli/cli.go
 package cli
 
 import (
@@ -105,7 +104,8 @@ func RunIndexCommand(args Arguments) error {
     if err != nil {
         return fmt.Errorf("failed to process file: %v", err)
     }
-    
+    // Create a slice to store hash log entries
+    var hashLog []index.HashLogEntry
     // Create a new index
     idx := index.NewIndex(args.InputFile)
     
@@ -113,6 +113,12 @@ func RunIndexCommand(args Arguments) error {
     for _, chunk := range chunks {
         hash := simhash.Hash(chunk.Content)
         idx.AddEntry(hash, chunk.Position)
+        // Add to hash log
+        hashLog = append(hashLog, index.HashLogEntry{
+            Hash:     hash,
+            Offset:   chunk.Position,
+            FileName: args.InputFile,
+        })
     }
     
     // Save the index to file

@@ -1,4 +1,3 @@
-// internal/chunker/chunker.go
 package chunker
 
 import (

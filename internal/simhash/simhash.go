@@ -1,4 +1,3 @@
-// internal/simhash/simhash.go
 package simhash
 
 import (

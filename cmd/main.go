@@ -1,4 +1,3 @@
-// cmd/textindex/main.go
 package main
 
 import (
